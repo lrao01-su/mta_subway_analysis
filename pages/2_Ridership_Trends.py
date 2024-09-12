@@ -4,10 +4,11 @@ import plotly.graph_objects as go
 
 @st.cache
 def load_ridership_data():
+    # Load the MTA ridership data from a CSV file
     file_path = "data/MTA_Daily_Ridership_Data__Beginning_2020_20240911.csv"
     df = pd.read_csv(file_path, parse_dates=['Date'])
     
-    # Rename columns
+    # Rename columns for easier access and readability
     column_mapping = {
         'Subways: Total Estimated Ridership': 'Subway Ridership',
         'Buses: Total Estimated Ridership': 'Bus Ridership',
@@ -26,16 +27,22 @@ def load_ridership_data():
     }
     df = df.rename(columns=column_mapping)
     
-    # Aggregate data to monthly
+    # Add a new column to indicate whether a date is a weekday or weekend
+    df['Day of Week'] = df['Date'].dt.day_name()
+    df['Is Weekend'] = df['Day of Week'].isin(['Saturday', 'Sunday'])
+    
+    # Aggregate data to monthly for the main chart
     df['Month'] = df['Date'].dt.to_period('M')
     monthly_df = df.groupby('Month').mean().reset_index()
     monthly_df['Month'] = monthly_df['Month'].dt.to_timestamp()
     
-    return monthly_df
+    return df, monthly_df
 
 def create_interactive_chart(df, selected_types, show_pandemic_percentage):
+    # Create an interactive line chart using Plotly
     fig = go.Figure()
 
+    # Add a line plot for each selected transportation type
     for column in selected_types:
         fig.add_trace(go.Scatter(
             x=df['Month'],
@@ -44,6 +51,7 @@ def create_interactive_chart(df, selected_types, show_pandemic_percentage):
             name=column
         ))
 
+    # Set chart title and y-axis labels based on user options
     title_suffix = "Monthly Average Ridership"
     y_axis_title = "Average Monthly Ridership"
     
@@ -51,6 +59,7 @@ def create_interactive_chart(df, selected_types, show_pandemic_percentage):
         title_suffix = "Monthly Average % of Pre-Pandemic Ridership"
         y_axis_title = "Average % of Pre-Pandemic"
 
+    # Update layout for the chart
     fig.update_layout(
         title=f'MTA {title_suffix}',
         xaxis_title='Month',
@@ -61,15 +70,37 @@ def create_interactive_chart(df, selected_types, show_pandemic_percentage):
 
     return fig
 
+def plot_weekday_vs_weekend(df, selected_column):
+    # Create a new DataFrame to compare ridership on weekdays vs weekends
+    weekend_vs_weekday = df.groupby(['Is Weekend'])[[selected_column]].mean().reset_index()
+
+    # Create a bar chart comparing weekdays and weekends
+    fig = go.Figure(
+        data=[
+            go.Bar(name="Weekdays", x=['Weekdays'], y=weekend_vs_weekday.loc[weekend_vs_weekday['Is Weekend'] == False, selected_column]),
+            go.Bar(name="Weekends", x=['Weekends'], y=weekend_vs_weekday.loc[weekend_vs_weekday['Is Weekend'] == True, selected_column])
+        ]
+    )
+
+    # Customize the layout of the bar chart
+    fig.update_layout(
+        title=f'Weekday vs Weekend {selected_column} Ridership',
+        xaxis_title='Type of Day',
+        yaxis_title=f'Average {selected_column} Ridership',
+        barmode='group'
+    )
+    
+    return fig
+
 # Streamlit app
 st.set_page_config(page_title="MTA Ridership Trends", page_icon="📊", layout="wide")
 
 st.title('📊 MTA Ridership Trends')
 
-# Load data
-ridership_df = load_ridership_data()
+# Load the ridership data (returns both daily and monthly aggregated data)
+daily_ridership_df, ridership_df = load_ridership_data()
 
-# Sidebar for controls
+# Sidebar for user controls
 st.sidebar.header("Controls")
 
 # Year-Month range selector
@@ -99,10 +130,6 @@ ridership_columns = ['Subway Ridership', 'Bus Ridership', 'LIRR Ridership',
                      'Metro-North Ridership', 'Access-A-Ride Ridership', 
                      'Bridges and Tunnels Traffic', 'Staten Island Railway Ridership']
 
-pandemic_columns = ['Subway % of Pre-Pandemic', 'Bus % of Pre-Pandemic', 'LIRR % of Pre-Pandemic',
-                    'Metro-North % of Pre-Pandemic', 'Access-A-Ride % of Pre-Pandemic',
-                    'Bridges and Tunnels % of Pre-Pandemic', 'Staten Island Railway % of Pre-Pandemic']
-
 # Dropdown for selecting all or specific types
 selection_option = st.sidebar.selectbox(
     "Select Transportation Types",
@@ -130,7 +157,7 @@ filtered_df = ridership_df[
     (ridership_df['Month'] <= end_date)
 ]
 
-# Main content
+# Main content - Plot the ridership chart
 if selected_types:
     if data_view == "Pandemic Percentage Data":
         selected_columns = [col.replace("Ridership", "% of Pre-Pandemic").replace("Traffic", "% of Pre-Pandemic") for col in selected_types]
@@ -143,7 +170,7 @@ else:
     st.warning("Please select at least one transportation type.")
 
 
-# Display raw data
+# Display raw data option
 if st.checkbox("Show Raw Data"):
     st.subheader("Raw Data")
     st.dataframe(filtered_df)
