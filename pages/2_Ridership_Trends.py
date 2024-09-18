@@ -33,10 +33,18 @@ def load_ridership_data():
     
     # Aggregate data to monthly for the main chart
     df['Month'] = df['Date'].dt.to_period('M')
-    monthly_df = df.groupby('Month').mean().reset_index()
+    
+    # Filter for numeric columns only
+    numeric_columns = df.select_dtypes(include=['number']).columns
+
+    # Group by 'Month' and calculate the mean for numeric columns
+    monthly_df = df.groupby('Month')[numeric_columns].mean().reset_index()
+    
+    # Convert 'Month' back to a timestamp
     monthly_df['Month'] = monthly_df['Month'].dt.to_timestamp()
     
     return df, monthly_df
+
 
 def create_interactive_chart(df, selected_types, show_pandemic_percentage):
     # Create an interactive line chart using Plotly
@@ -99,6 +107,7 @@ st.title('📊 MTA Ridership Trends')
 
 # Load the ridership data (returns both daily and monthly aggregated data)
 daily_ridership_df, ridership_df = load_ridership_data()
+
 
 # Sidebar for user controls
 st.sidebar.header("Controls")
