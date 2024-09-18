@@ -3,8 +3,9 @@ import pandas as pd
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
-from google.transit import gtfs_realtime_pb2  # To parse real-time GTFS data
 from datetime import datetime, timezone
+from google.transit import gtfs_realtime_pb2
+import requests
 
 
 GTFS_STATIC_PATH = "GTFS_transit_static/"
