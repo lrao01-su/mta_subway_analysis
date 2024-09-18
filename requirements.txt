@@ -4,3 +4,4 @@ requests
 folium
 plotly
 streamlit-folium
+google.transit
