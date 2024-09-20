@@ -3,7 +3,7 @@ import pandas as pd
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from google.transit import gtfs_realtime_pb2
 import requests
 
@@ -83,94 +83,114 @@ def plot_stops_on_map(stops, route_color):
 
     return nyc_map
 
-#Real Time F Train Status at Roosevelt Island
+# Display map of stops for the selected route
+stops_map = plot_stops_on_map(stops_for_route[['stop_name', 'stop_lat', 'stop_lon']].drop_duplicates(), route_color)
+st_folium(stops_map)
 
-# Define the real-time API URL (use the correct feed for the F train)
+
+# Real time F train location
+
+
+# MTA GTFS URL for BDFM lines, including the F train
 MTA_GTFS_URL = "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm"
 
 # Function to fetch real-time GTFS data
 def fetch_real_time_data():
-    response = requests.get(MTA_GTFS_URL)
-    if response.status_code == 200:
-        return response.content
-    else:
-        st.error(f"Failed to fetch data: {response.status_code}")
+    try:
+        response = requests.get(MTA_GTFS_URL)
+        if response.status_code == 200:
+            st.write("Successfully fetched data from the API")
+            return response.content
+        else:
+            st.error(f"Failed to fetch data: {response.status_code}")
+            return None
+    except Exception as e:
+        st.error(f"Error fetching data: {str(e)}")
         return None
 
 # Function to parse the real-time GTFS data
 def parse_gtfs_realtime_data(data):
-    feed = gtfs_realtime_pb2.FeedMessage()
-    feed.ParseFromString(data)
-    return feed
+    try:
+        feed = gtfs_realtime_pb2.FeedMessage()
+        feed.ParseFromString(data)
+        st.write("Successfully parsed GTFS feed")
+        return feed
+    except Exception as e:
+        st.error(f"Error parsing GTFS data: {str(e)}")
+        return None
 
-# Filter the stops_df to find the stop ID for Roosevelt Island
-roosevelt_island_stop = stops_df[stops_df['stop_name'].str.contains("Roosevelt Island", case=False)]
-roosevelt_island_stop_id = roosevelt_island_stop['stop_id'].values[0]  # Extract the stop ID
-st.write(f"Roosevelt Island Stop ID: {roosevelt_island_stop_id}")
+# Function to convert Unix timestamp to NYC EST time
+def convert_unix_time(unix_time):
+    utc_time = datetime.fromtimestamp(unix_time, tz=timezone.utc)
+    nyc_time = utc_time + timedelta(hours=-4)  # Adjust for EDT (-4 hours)
+    return nyc_time.strftime('%Y-%m-%d %H:%M:%S')
 
-# Function to filter F train status and calculate time remaining for arrival
-def get_f_train_status(feed, roosevelt_stop_id, time_limit=30):
-    f_train_status = []
-    current_time = datetime.now(timezone.utc)
-
+# Function to track the current position of F trains
+def get_f_train_position(feed, stops_df):
+    f_train_positions = []
     for entity in feed.entity:
-        if entity.trip_update:  # trip_update contains the trip status
-            trip = entity.trip_update.trip
+        if entity.HasField('vehicle'):  
+            trip = entity.vehicle.trip
+            if trip.route_id == 'F':  # Only focus on F train data
+                stop_id = entity.vehicle.stop_id
+                timestamp = entity.vehicle.timestamp
+                current_position = entity.vehicle.position
 
-            # Only look for the F train
-            if trip.route_id == 'F':
-                for stop_time_update in entity.trip_update.stop_time_update:
-                    # Check if the stop is Roosevelt Island
-                    if stop_time_update.stop_id == roosevelt_stop_id:
-                        # Get the arrival and departure times
-                        arrival_timestamp = stop_time_update.arrival.time
-                        arrival_time = datetime.fromtimestamp(arrival_timestamp, tz=timezone.utc)
-                        minutes_until_arrival = (arrival_time - current_time).total_seconds() / 60
-                        
-                        # Only include trains arriving within the next 30 minutes
-                        if 0 <= minutes_until_arrival <= time_limit:
-                            f_train_status.append({
-                                "Train ID": trip.trip_id,
-                                "Route": trip.route_id,
-                                "Arrival Time": arrival_time.strftime('%H:%M:%S'),
-                                "Minutes Until Arrival": max(0, int(minutes_until_arrival))  # Avoid negative minutes
-                            })
+                # Get stop name from stops_df using stop_id
+                if stop_id in stops_df['stop_id'].values:
+                    stop_name = stops_df[stops_df['stop_id'] == stop_id]['stop_name'].values[0]
+                else:
+                    stop_name = "Unknown Stop"
 
-    return pd.DataFrame(f_train_status)
+                # Store train position and stop info
+                f_train_positions.append({
+                    "Train ID": trip.trip_id,
+                    "Current Stop": stop_name,
+                    "Stop ID": stop_id,
+                    "Latitude": current_position.latitude if current_position.HasField('latitude') else 0,
+                    "Longitude": current_position.longitude if current_position.HasField('longitude') else 0,
+                    "Timestamp": convert_unix_time(timestamp)
+                })
 
+                # Debug: Show train position in Streamlit
+                #st.write(f"F Train ID: {trip.trip_id}, Current Stop: {stop_name}, Latitude: {current_position.latitude}, Longitude: {current_position.longitude}, Timestamp: {convert_unix_time(timestamp)}")
 
-# Display map if route is selected
-st.subheader(f"Map of Stops for Route {route_id}")
-stops_map = plot_stops_on_map(stops_for_route_limited, route_color)
-st_folium(stops_map)
+    return pd.DataFrame(f_train_positions)
 
+# Function to separate F trains by direction (northbound and southbound)
+def separate_trains_by_direction(f_train_positions_df):
+    northbound_trains = f_train_positions_df[f_train_positions_df['Train ID'].str.contains('N')]
+    southbound_trains = f_train_positions_df[f_train_positions_df['Train ID'].str.contains('S')]
+    return northbound_trains, southbound_trains
 
-# Display real-time train status at Roosevelt Island
-st.subheader("F Train Status at Roosevelt Island")
+# Main Flow
+st.subheader("Fetching Real-Time F Train Data")
 
-# Fetch real-time GTFS data
+# Fetch real-time data
 real_time_data = fetch_real_time_data()
 
+# Parse GTFS data
 if real_time_data:
-    # Parse the real-time GTFS data
     gtfs_feed = parse_gtfs_realtime_data(real_time_data)
-    
-    # Get the F train status at Roosevelt Island
-    f_train_status_df = get_f_train_status(gtfs_feed, roosevelt_island_stop_id)
-    
-    if not f_train_status_df.empty:
-        for index, row in f_train_status_df.iterrows():
-            with st.container():
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric(label="Train ID", value=row['Train ID'])
-                
-                with col2:
-                    st.metric(label="Arrives In", value=f"{row['Minutes Until Arrival']} mins")
-                
-                with col3:
-                    st.metric(label="Arrival Time", value=row['Arrival Time'])
-    else:
-        st.write("No F train approaching Roosevelt Island at this time.")
-        
+
+    #stops_df = pd.read_csv('stops.txt')  
+
+    if gtfs_feed:
+        # Track F train positions
+        f_train_positions = get_f_train_position(gtfs_feed, stops_df)
+
+        if not f_train_positions.empty:
+            #Separate trains by direction (northbound vs southbound)
+            northbound_trains, southbound_trains = separate_trains_by_direction(f_train_positions)
+
+            # Sort by the most recent timestamp
+            northbound_trains = northbound_trains.sort_values(by='Timestamp', ascending=True)
+            southbound_trains = southbound_trains.sort_values(by='Timestamp', ascending=True)
+            # Display tables for northbound and southbound F trains
+            st.subheader("Northbound F Trains to Jamaica-179 St")
+            st.dataframe(northbound_trains[['Train ID', 'Current Stop', 'Timestamp']])
+
+            st.subheader("Southbound F Trains to Coney Island-Stillwell Av")
+            st.dataframe(southbound_trains[['Train ID', 'Current Stop', 'Timestamp']])
+        else:
+            st.write("No F trains found.")
